@@ -11,7 +11,16 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import address_audit, consensus, coverage_gaps, db, experiments, ingest, review_groups
+from . import (
+    address_audit,
+    consensus,
+    coverage_gaps,
+    db,
+    experiments,
+    ingest,
+    review_groups,
+    review_replay,
+)
 from .config import Settings, get_settings
 from .matcher import candidate_to_dict, match_address, result_to_dict
 from .schemas import (
@@ -433,6 +442,30 @@ def list_coverage_gaps(status: str | None = None,
             detail="非法 status 过滤值，仅支持 open / covered",
         )
     return coverage_gaps.compute_gaps(conn, settings, coverage=status)
+
+
+# --- review-conclusion replay -----------------------------------------------
+
+
+@app.get("/api/review-replay")
+def list_review_replay(category: str | None = None,
+                       conn: db.sqlite3.Connection = Depends(get_conn),
+                       settings: Settings = Depends(settings_dep)) -> dict[str, Any]:
+    """复核结论回放：取全部已复核记录，以其原查询在**当前标准地址表**上按
+    **默认规则**重新匹配，逐条对照人工结论分类——确认/改派记录自动命中所选
+    地址为 ``consistent``（一致），自动命中其他地址为 ``conflict``（冲突），
+    未自动命中为 ``missed``（漏命中）；判无匹配记录出现自动命中为
+    ``false_hit``（误命中），否则为 ``consistent``。
+
+    只读操作：不写入匹配日志，也不改动任何复核记录。
+    """
+    if category is not None and category not in review_replay.VALID_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail="非法 category 过滤值，仅支持 "
+                   "consistent / conflict / missed / false_hit",
+        )
+    return review_replay.compute_replay(conn, settings, category=category)
 
 
 # --- standard-address self-match audit --------------------------------------
