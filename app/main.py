@@ -11,7 +11,16 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import address_audit, consensus, coverage_gaps, db, experiments, ingest, review_groups
+from . import (
+    address_audit,
+    consensus,
+    coverage_gaps,
+    db,
+    experiments,
+    ingest,
+    review_groups,
+    review_replay,
+)
 from .config import Settings, get_settings
 from .matcher import candidate_to_dict, match_address, result_to_dict
 from .schemas import (
@@ -412,6 +421,32 @@ def review_group(payload: GroupReviewAction,
     except review_groups.GroupReviewError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, **result}
+
+
+# --- review verdict replay ---------------------------------------------------
+
+
+@app.get("/api/review-replay")
+def list_review_replay(category: str | None = None,
+                       conn: db.sqlite3.Connection = Depends(get_conn),
+                       settings: Settings = Depends(settings_dep)) -> dict[str, Any]:
+    """复核结论回放：取全部已复核记录，以原查询在当前标准地址表上按默认规则
+    重新匹配（纯评分，不查询复核共识记忆），逐条对照人工结论：
+
+    确认/改派记录自动命中所选地址为 ``consistent``，命中其他地址为
+    ``conflict``，未自动命中为 ``missed``；判无匹配记录出现自动命中为
+    ``false_hit``，否则为 ``consistent``。返回各类数量及原结论、当前首选
+    与得分，便于定位规则或地址表变化带来的风险。
+
+    只读操作：不写入匹配日志，也不改动任何复核记录。
+    """
+    if category is not None and category not in review_replay.VALID_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail="非法 category 过滤值，仅支持 "
+                   "consistent / conflict / missed / false_hit",
+        )
+    return review_replay.compute_replay(conn, settings, category=category)
 
 
 # --- address coverage gaps --------------------------------------------------

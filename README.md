@@ -9,6 +9,7 @@
 - 🌐 网页界面：单条/批量匹配、**规则 A/B 对照实验**、上传标准地址 CSV、待确认队列人工复核（含同案合并复核、复核共识记忆）、**地址覆盖缺口清单**
 - 🕳️ **地址覆盖缺口**：从已保存且状态为 `no_match` 的匹配日志生成缺口清单，按归一化后的**道路词元 + 地区词元 + 门牌号**归组（门牌号不同不算同一缺口），展示出现次数、原始查询示例与最近出现时间；每次打开清单都用**当前标准地址表与默认规则**重跑每组代表查询——现已能自动命中的组标为**已覆盖**并显示命中地址，其余标为**待补录**并显示当前首选候选，避免上传地址后仍把旧拒绝记录当作未解决。支持待补录 / 已覆盖筛选，全程只读、不写日志
 - 🩺 **标准地址自匹配巡检**：对当前表每条标准地址，以其全文作为查询、按默认规则在**完整地址表**上重新评分，只列出**未能自动命中自身 ID** 的记录。每条风险给出自身分数与所有得分不低于「自身分数 − 默认分差阈值」的其他地址（阻碍候选，**不受前五候选截断**），并按 **自身分数不足 / 首选偏移 / 分差歧义** 分类汇总；上传新表后刷新即重新计算，全程只读、不写日志
+- 🔁 **复核结论回放**：取全部已复核记录，以原查询在**当前标准地址表**上按**默认规则**重新匹配，逐条对照人工结论——确认/改派记录自动命中所选地址为**一致**、命中其他地址为**冲突**、未自动命中为**漏命中**，判无匹配记录出现自动命中为**误命中**；返回各类数量、原结论、当前首选与得分，支持按类别筛选，全程只读、不写日志也不改动复核记录
 - 🧪 **规则 A/B 对照实验**：提交 2～4 个命名规则档案（自动命中/拒绝/分差阈值 + 词元权重）与 1～100 条查询，在同一地址表快照下逐档运行，逐条对比状态/首选/得分/候选差异并标出不一致与触发阈值，结果按实验编号持久化回看
 - 📈 **历史回归对比**：任选两次已持久化实验，服务端按档案名称与去首尾空白后的查询逐档对齐（缺失档案 / 重复查询直接拒绝），逐单元分类为 改善 / 退化 / 仅分数变化 / 无变化 并汇总；地址表快照 digest 不同时提示不可直接比较但仍展示逐条差异；页面支持按类别筛选与 CSV 下载
 - 🔌 REST API：`/api/match`、`/api/match/batch`、`/api/addresses`、复核接口、A/B 实验接口（含 `/docs` Swagger）
@@ -29,13 +30,15 @@ docker compose up --build
 
 | 入口 | 地址 |
 | --- | --- |
-| 网页界面（默认「单条 / 批量匹配」，标签页内含「地址覆盖缺口」「自匹配巡检」等页面） | http://localhost:8000 |
+| 网页界面（默认「单条 / 批量匹配」，标签页内含「复核回放」「地址覆盖缺口」「自匹配巡检」等页面） | http://localhost:8000 |
+| 复核结论回放 API | http://localhost:8000/api/review-replay |
 | 标准地址自匹配巡检 API | http://localhost:8000/api/address-audit |
 | REST API 文档（Swagger） | http://localhost:8000/docs |
 | 健康检查 | http://localhost:8000/api/health |
 
 打开 **http://localhost:8000** 后，点击顶部 **「地址覆盖缺口」** 标签即可查看缺口清单，
-点击 **「自匹配巡检」** 标签即可查看标准地址自匹配巡检结果。
+点击 **「自匹配巡检」** 标签即可查看标准地址自匹配巡检结果，
+点击 **「复核回放」** 标签即可查看复核结论回放对照。
 
 - **端口**：`8000`（在 `docker-compose.yml` 的 `ports` 中修改）
 - 首次启动会自动加载内置示例标准地址（`sample_data/standard_addresses.csv`，共 15 条，含中英文地址）
@@ -493,6 +496,52 @@ curl -s 'http://localhost:8000/api/address-audit?category=best_drifted'
 
 ---
 
+## 复核结论回放
+
+人工复核的结论是基于「当时的地址表与规则」做出的；地址表或默认阈值变化后，旧结论可能与
+当前自动行为不再一致。「复核回放」页（顶部标签，入口 http://localhost:8000 ）把每条
+**已复核**记录的原查询放到**当前标准地址表**上按**默认规则**重新匹配（纯评分，不查询
+复核共识记忆），逐条对照人工结论并分类：
+
+| 人工结论 | 当前回放 | 分类 |
+| --- | --- | --- |
+| 确认首选 / 改派 | 自动命中**所选地址** | ✅ 一致 `consistent` |
+| 确认首选 / 改派 | 自动命中**其他地址** | ⛔ 冲突 `conflict` |
+| 确认首选 / 改派 | 未自动命中 | ⚠ 漏命中 `missed` |
+| 判无匹配 | 出现自动命中 | ⛔ 误命中 `false_hit` |
+| 判无匹配 | 仍未自动命中 | ✅ 一致 `consistent` |
+
+- **每条记录展示**：原始查询与记录号、复核时间、**原结论**（动作 + 所选地址 + 复核得分；
+  所选地址已被删除时明确标注）、**当前回放**（状态、当前首选及得分、判定原因）、分类判定
+  说明，以及可展开的本次回放候选明细（人工所选地址带标记）。
+- **汇总与筛选**：页面顶部与 API 均返回各类数量（一致 / 冲突 / 漏命中 / 误命中）与已复核
+  总数；标签角标显示非一致记录数（冲突 + 漏命中 + 误命中）。下拉框支持按类别筛选，
+  汇总计数不受筛选影响；列表按 冲突 → 误命中 → 漏命中 → 一致 排序，风险优先。
+- **刷新即重算**：每次打开页面或点击「重新回放」都用当前地址表与默认阈值整体重算，
+  便于定位规则或地址表变化带来的风险。
+- **只读**：回放只调用匹配器评分，**不写入任何匹配日志**，也**不改动任何复核记录**。
+
+```bash
+# 查看回放清单（默认全部；category 可筛选 consistent|conflict|missed|false_hit）
+curl -s http://localhost:8000/api/review-replay
+curl -s 'http://localhost:8000/api/review-replay?category=conflict'
+# => {"generated_at":"…","total_reviewed":4,"consistent":2,"conflict":1,
+#     "missed":1,"false_hit":0,"risk_count":2,
+#     "thresholds":{"auto_threshold":0.8,...},
+#     "items":[{
+#       "match_id":2,"query":"100 Lake Dr, Austin TX",
+#       "review_action":"overridden","review_action_label":"改派",
+#       "selected_id":5,"selected_full_text":"1000 Lake Drive",
+#       "selected_missing":false,"review_score":0.7,
+#       "category":"conflict","category_label":"冲突",
+#       "verdict_reason":"当前回放自动命中 #4（100.0%），与人工所选地址 #5 不同",
+#       "replay_status":"auto_matched","replay_best_id":4,
+#       "replay_best_score":1.0,"replay_best_full_text":"100 Lake Drive",
+#       "replay":{"status":"auto_matched","best_id":4,"candidates":[...]}}]}
+```
+
+---
+
 ## API 速览
 
 | 方法 | 路径 | 说明 |
@@ -515,6 +564,7 @@ curl -s 'http://localhost:8000/api/address-audit?category=best_drifted'
 | POST | `/api/matches/{id}/review` | 单条复核：confirmed / overridden / rejected |
 | GET | `/api/review-groups` | 待确认记录的同案分组（归一化键 + 候选签名归组，含组内原始查询与数量） |
 | POST | `/api/review-groups/review` | 整组复核：单事务核对组签名与成员集合，冲突返回 409 且一条不写 |
+| GET | `/api/review-replay?category=…` | 复核结论回放：已复核记录以原查询在当前地址表上按默认规则重跑并对照人工结论，分为 一致(consistent)/冲突(conflict)/漏命中(missed)/误命中(false_hit)，返回各类数量、原结论、当前首选与得分；只读不写 |
 | GET | `/api/coverage-gaps?status=open` | 地址覆盖缺口：`no_match` 日志按归一化道路/地区词元 + 门牌号归组，每次调用用当前地址表与默认规则重跑代表查询，标记 待补录(open)/已覆盖(covered)；只读不写 |
 | GET | `/api/address-audit?category=…` | 标准地址自匹配巡检：每条标准地址以其全文按默认规则在完整地址表上评分，只列出未自动命中自身 ID 的记录，含自身分数与得分 ≥ 自身分数 − 默认分差阈值的全部阻碍候选（不受前五截断），按 自身分数不足(self_score_low)/首选偏移(best_drifted)/分差歧义(margin_ambiguous) 分类汇总；只读不写 |
 
@@ -561,6 +611,7 @@ curl -s 'http://localhost:8000/api/address-audit?category=best_drifted'
 │   ├── experiments.py     # 规则 A/B 对照实验：逐档运行、差异分析与持久化；历史回归对比（对齐/分类/汇总）
 │   ├── consensus.py       # 复核共识记忆：历史复核聚合与自动指向
 │   ├── review_groups.py   # 同案合并复核：归组与整组事务写入
+│   ├── review_replay.py   # 复核结论回放：已复核记录按当前表/默认规则重跑并对照分类（只读）
 │   ├── coverage_gaps.py   # 地址覆盖缺口：no_match 日志归组 + 当前表/默认规则实时重跑（只读）
 │   ├── address_audit.py   # 标准地址自匹配巡检：每条记录以自身全文重评全表，列出未命中自身的风险（只读）
 │   ├── ingest.py          # CSV / JSON 标准地址导入

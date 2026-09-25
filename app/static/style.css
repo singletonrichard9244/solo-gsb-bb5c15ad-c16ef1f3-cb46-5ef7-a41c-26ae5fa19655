@@ -12,6 +12,8 @@
     --amber-bg: #fdf3dc;
     --red: #b3372f;
     --red-bg: #fbeae8;
+    --purple: #6d3ab8;
+    --purple-bg: #f1e9fb;
     --gray-bg: #eef1f6;
 }
 
@@ -359,6 +361,33 @@ th { color: var(--muted); font-weight: 600; }
 .cmp-cat.regressed { background: var(--red-bg); color: var(--red); }
 .cmp-cat.score_only { background: var(--amber-bg); color: var(--amber); }
 .cmp-cat.unchanged { background: var(--gray-bg); color: var(--muted); }
+
+/* ============================================== review verdict replay page */
+
+.replay-item {
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-top: 12px;
+}
+.replay-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.replay-cat {
+    display: inline-block; padding: 3px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 700; white-space: nowrap;
+}
+.replay-cat.consistent { background: var(--green-bg); color: var(--green); }
+.replay-cat.conflict { background: var(--red-bg); color: var(--red); }
+.replay-cat.missed { background: var(--amber-bg); color: var(--amber); }
+.replay-cat.false_hit { background: var(--purple-bg); color: var(--purple); }
+.replay-query { font-weight: 600; word-break: break-all; }
+.replay-meta { margin: 8px 0; word-break: break-all; }
+.replay-meta b { color: var(--ink); }
+.replay-current { font-size: 13px; margin: 6px 0; word-break: break-all; }
+.replay-current b { color: var(--primary); }
+.replay-current .status { margin-bottom: 0; }
+.replay-reason { font-size: 13px; margin: 6px 0; word-break: break-all; }
+.replay-details { margin-top: 8px; }
+.replay-details > summary {
+    cursor: pointer; font-size: 13px; color: var(--primary);
+}
 
 /* ============================================== address coverage gaps page */
 

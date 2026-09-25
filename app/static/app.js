@@ -196,6 +196,7 @@ $$(".tab").forEach((btn) => {
         $(`#tab-${btn.dataset.tab}`).classList.add("active");
         if (btn.dataset.tab === "table") loadAddresses();
         if (btn.dataset.tab === "review") loadReview();
+        if (btn.dataset.tab === "replay") loadReviewReplay();
         if (btn.dataset.tab === "gaps") loadCoverageGaps();
         if (btn.dataset.tab === "audit") loadAddressAudit();
         if (btn.dataset.tab === "experiment") {
@@ -270,6 +271,7 @@ async function onReviewClick(event) {
         btn.textContent = "✓ 已记录";
         btn.classList.add("confirm");
         await refreshHealth();
+        refreshReplayBadge();
     } catch (err) {
         btn.disabled = false;
         alert(err.message);
@@ -316,6 +318,7 @@ $("#btn-sample").addEventListener("click", async () => {
         loadAddresses();
         refreshHealth();
         refreshAuditBadge();
+        refreshReplayBadge();
     } catch (err) {
         $("#table-msg").innerHTML = `<span class="err-msg">${escapeHtml(err.message)}</span>`;
     }
@@ -424,6 +427,7 @@ async function directUpload(file) {
     loadAddresses();
     refreshHealth();
     refreshAuditBadge();
+    refreshReplayBadge();
 }
 
 $("#csv-preview-panel").addEventListener("click", async (event) => {
@@ -475,6 +479,7 @@ $("#csv-preview-panel").addEventListener("click", async (event) => {
         loadAddresses();
         refreshHealth();
         refreshAuditBadge();
+        refreshReplayBadge();
     } catch (err) {
         msg.innerHTML = `<span class="err-msg">${escapeHtml(err.message)}</span>`;
         confirmBtn.disabled = false;
@@ -615,6 +620,7 @@ $("#review-groups").addEventListener("click", async (event) => {
             body: JSON.stringify(body),
         });
         await refreshHealth();
+        refreshReplayBadge();
         loadReview();
     } catch (err) {
         // 409：组签名或成员集合已变化，一条也未写入，刷新展示最新状态。
@@ -622,6 +628,101 @@ $("#review-groups").addEventListener("click", async (event) => {
         loadReview();
     }
 });
+
+// ----------------------------------------------------- review verdict replay
+
+const REPLAY_CATEGORY_LABEL = {
+    consistent: "一致",
+    conflict: "冲突",
+    missed: "漏命中",
+    false_hit: "误命中",
+};
+
+// The replay re-scores every reviewed record on each call, so (like the gaps
+// manifest and the audit) it is only recomputed once the tab was opened.
+let replayEverLoaded = false;
+
+function renderReplayItem(item) {
+    let original;
+    if (item.review_action === "rejected") {
+        original = "<b>判无匹配</b>";
+    } else if (item.selected_id !== null && item.selected_id !== undefined) {
+        original = `<b>${escapeHtml(item.review_action_label)}</b> → ` +
+            `#${item.selected_id} ${escapeHtml(item.selected_full_text || "")}` +
+            `${item.selected_missing ? "（已删除）" : ""}` +
+            `<span class="muted">（复核得分 ${pct(item.review_score)}）</span>`;
+    } else {
+        original = `<b>${escapeHtml(item.review_action_label)}</b> → 所选地址已删除`;
+    }
+    const bestLine = item.replay_best_id !== null && item.replay_best_id !== undefined
+        ? `当前首选：<b>#${item.replay_best_id}</b> ${escapeHtml(item.replay_best_full_text || "")}` +
+          `<span class="muted">（综合 ${pct(item.replay_best_score)} · ${escapeHtml(item.replay_reason || "")}）</span>`
+        : '<span class="muted">当前标准地址表中没有任何候选</span>';
+    const targetRibbon = item.selected_id !== null && item.selected_id !== undefined
+        ? { id: item.selected_id, label: "人工所选" }
+        : null;
+    const candidates = (item.replay.candidates || [])
+        .map((c, i) => renderCandidate(c, i, { targetRibbon }))
+        .join("");
+    return `
+    <div class="replay-item">
+        <div class="replay-head">
+            <span class="replay-cat ${item.category}">${REPLAY_CATEGORY_LABEL[item.category] || item.category}</span>
+            <span class="replay-query">🔍 ${escapeHtml(item.query)}</span>
+        </div>
+        <div class="replay-meta muted">
+            记录 #${item.match_id} · 复核于 ${escapeHtml(item.reviewed_at || "")}
+            · 原结论：${original}
+        </div>
+        <div class="replay-current">
+            当前回放：<span class="status ${item.replay_status}">${STATUS_LABEL[item.replay_status] || item.replay_status}</span>
+            ${bestLine}
+        </div>
+        <div class="replay-reason">判定：${escapeHtml(item.verdict_reason)}</div>
+        <details class="replay-details">
+            <summary>本次回放候选明细（${(item.replay.candidates || []).length}）</summary>
+            ${candidates || '<div class="meta muted">无候选</div>'}
+        </details>
+    </div>`;
+}
+
+async function loadReviewReplay() {
+    const filter = $("#replay-filter").value;
+    const list = $("#replay-list");
+    list.innerHTML = '<p class="muted">正在用当前标准地址表逐条回放复核结论…</p>';
+    try {
+        const qs = filter ? `?category=${encodeURIComponent(filter)}` : "";
+        const data = await api(`/api/review-replay${qs}`);
+        replayEverLoaded = true;
+        $("#replay-count").textContent = data.risk_count || "";
+        $("#replay-summary").innerHTML =
+            `<span class="muted">共 <b>${data.total_reviewed}</b> 条已复核记录：` +
+            `<span class="replay-cat consistent">一致 ${data.consistent}</span> ` +
+            `<span class="replay-cat conflict">冲突 ${data.conflict}</span> ` +
+            `<span class="replay-cat missed">漏命中 ${data.missed}</span> ` +
+            `<span class="replay-cat false_hit">误命中 ${data.false_hit}</span>` +
+            ` · 回放时间 ${escapeHtml(data.generated_at)}</span>`;
+        if (data.items.length === 0) {
+            list.innerHTML = filter
+                ? '<p class="muted">当前筛选条件下没有记录。</p>'
+                : '<p class="muted">暂无已复核记录，复核待确认记录后即可在此回放对照。</p>';
+            return;
+        }
+        list.innerHTML = data.items.map(renderReplayItem).join("");
+    } catch (err) {
+        list.innerHTML = `<p class="err-msg">${escapeHtml(err.message)}</p>`;
+    }
+}
+
+$("#btn-refresh-replay").addEventListener("click", loadReviewReplay);
+$("#replay-filter").addEventListener("change", loadReviewReplay);
+
+async function refreshReplayBadge() {
+    // Reviews or table changes alter the replay; recompute only after the tab
+    // has been opened at least once (each call re-scores every reviewed record).
+    if (!replayEverLoaded) return;
+    await loadReviewReplay();
+}
 
 // -------------------------------------------------------- coverage gaps
 
